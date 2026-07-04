@@ -12,27 +12,32 @@ import uuid
 router = APIRouter(prefix="/blacklist", tags=["Blacklist"])
 
 BLACK_DATA = {}
-FFL_ID = "911529425"
+mem_black_data_lock = asyncio.Lock()
 
-def init_data():
+
+FFL_ID = "940341117"
+
+
+async def init_data():
     global BLACK_DATA
     db = SessionLocal()
     try:
         users = db.query(Blacklist).all()
-        BLACK_DATA = {
-            user.userid: {
-                "userid": user.userid,
-                "username": user.username,
-                "reason": user.reason,
-                "operator": user.operator,
-                "created_at": user.created_at.timestamp()
+        async with mem_black_data_lock:
+            BLACK_DATA = {
+                user.userid: {
+                    "userid": user.userid,
+                    "username": user.username,
+                    "reason": user.reason,
+                    "operator": user.operator,
+                    "created_at": user.created_at.timestamp()
+                }
+                for user in users
             }
-            for user in users
-        }
-        return BLACK_DATA
+            return BLACK_DATA
     finally:
         db.close()
-    
+
 
 @router.get("/init")
 async def inittoken(response: Response, db: Session = Depends(get_db)):
@@ -64,37 +69,42 @@ async def adduser(request: Request, response: Response, db: Session = Depends(ge
     if not "userId" in body or not "reason" in body:
         response.status_code = 400
         return {"msg": "参数错误", "data": {}}
-    
+    body["userId"] = str(body["userId"])
+    body["reason"] = str(body["reason"])
+    body["operator"] = str(body.get("operator", botid))
+
     # 检查内存缓存
-    if body["userId"] in BLACK_DATA:
-        response.status_code = 400
-        return {"msg": "用户已在黑名单中", "data": {}}
-    
+    async with mem_black_data_lock:
+        if body["userId"] in BLACK_DATA.keys():
+            response.status_code = 400
+            return {"msg": "用户已在黑名单中", "data": {}}
+
     # FTs：原requests.get
     ret = await getUserInfo(body["userId"])
     if not ret["data"]["user"]["userId"]:
         response.status_code = 400
         return {"msg": "用户不存在", "data": {}}
-    
-    # 添加到内存缓存
-    BLACK_DATA[body["userId"]] = {
-        "userid": body["userId"],
-        "username": ret["data"]["user"]["nickname"],
-        "reason": body["reason"],
-        "operator": body.get("operator", botid),
-        "created_at": time.time()
-    }
-    
+
     # FTs：持久化到数据库
     db.add(Blacklist(
         userid=body["userId"],
         username=ret["data"]["user"]["nickname"],
         reason=body["reason"],
-        operator=body.get("operator", botid),
+        operator=body["operator"],
         created_at=datetime.datetime.now()
     ))
     db.commit()
-    
+
+    async with mem_black_data_lock:
+        # 添加到内存缓存
+        BLACK_DATA[body["userId"]] = {
+            "userid": body["userId"],
+            "username": ret["data"]["user"]["nickname"],
+            "reason": body["reason"],
+            "operator": body.get("operator", botid),
+            "created_at": time.time()
+        }
+
     # ws推送
     asyncio.create_task(ws_manager.broadcast({
         "event": "new_blacklist",
@@ -108,7 +118,7 @@ async def adduser(request: Request, response: Response, db: Session = Depends(ge
     }))
     # 群聊推送
     await sendMsg(FFL_ID, "group", "markdown",
-            f'#### **{ret["data"]["user"]["nickname"]}**(`{body["userId"]}`)被加入黑名单，原因：`{body["reason"]}`\n操作人：**{body.get("operator", botid)}**')
+                  f'#### **{ret["data"]["user"]["nickname"]}**(`{body["userId"]}`)被加入黑名单，原因：`{body["reason"]}`\n操作人：**{body.get("operator", botid)}**')
     response.status_code = 200
     return {"msg": "success", "data": {}}
 
@@ -117,9 +127,10 @@ async def adduser(request: Request, response: Response, db: Session = Depends(ge
 async def listuser(response: Response, userid=""):
     # 有userid用查userid，没userid返回全部
     if userid:
-        # 从内存缓存中查找
-        if userid in BLACK_DATA:
-            user_data = BLACK_DATA[userid]
+        async with mem_black_data_lock:
+            # 从内存缓存中查找
+            user_data = BLACK_DATA.get(userid)
+        if user_data:
             blacklist = [{
                 "userId": user_data["userid"],
                 "username": user_data["username"],
@@ -130,14 +141,15 @@ async def listuser(response: Response, userid=""):
         else:
             blacklist = []
     else:
-        blacklist = [{
-            "userId": data["userid"],
-            "username": data["username"],
-            "reason": data["reason"],
-            "operator": data["operator"],
-            "created_at": data["created_at"]
-        } for data in BLACK_DATA.values()]
-    
+        async with mem_black_data_lock:
+            blacklist = [{
+                "userId": data["userid"],
+                "username": data["username"],
+                "reason": data["reason"],
+                "operator": data["operator"],
+                "created_at": data["created_at"]
+            } for data in BLACK_DATA.values()]
+
     response.status_code = 200
     return {"msg": "success", "data": {"blacklist": blacklist}}
 
@@ -155,30 +167,37 @@ async def deluser(request: Request, response: Response, db: Session = Depends(ge
         return {"msg": "无效的Token", "data": {}}
     botid = botid[0][0]
     body = await request.json()
-    
-    # 检查内存缓存
-    if body["userId"] not in BLACK_DATA:
+    if not "userId" in body or not "reason" in body:
         response.status_code = 400
-        return {"msg": "用户不在黑名单中", "data": {}}
-    
+        return {"msg": "参数错误", "data": {}}
+    body["userId"] = str(body["userId"])
+    body["reason"] = str(body["reason"])
+    body["operator"] = str(body.get("operator", botid))
+    async with mem_black_data_lock:
+        # 检查内存缓存
+        if body["userId"] not in BLACK_DATA.keys():
+            response.status_code = 400
+            return {"msg": "用户不在黑名单中", "data": {}}
+
     # 从数据库中删除
     db.query(Blacklist).filter(Blacklist.userid == body["userId"]).delete()
     db.commit()
 
-    # 再从内存缓存中删除
-    del BLACK_DATA[body["userId"]]
-    
+    async with mem_black_data_lock:
+        # 再从内存缓存中删除
+        del BLACK_DATA[body["userId"]]
+
     asyncio.create_task(ws_manager.broadcast({
         "event": "del_blacklist",
         "data": {
             "userId": body["userId"],
             "reason": body["reason"],
-            "operator": body.get("operator", botid),
+            "operator": body["operator"],
             "created_at": time.time()
         }
     }))
     await sendMsg(FFL_ID, "group", "markdown",
-            f'#### **{body["userId"]}**被移除黑名单，原因：`{body["reason"]}`\n操作人：**{body.get("operator", botid)}**')
+                  f'#### **{body["userId"]}** 被移除黑名单，原因：`{body["reason"]}`\n操作人：**{body.get("operator", botid)}**')
     response.status_code = 200
     return {"msg": "success", "data": {}}
 
@@ -187,9 +206,9 @@ async def deluser(request: Request, response: Response, db: Session = Depends(ge
 @router.post("/bot")
 async def bot(request: Request, response: Response, db: Session = Depends(get_db)):
     global BLACK_DATA
-    # if request.client.host not in ["192.144.130.26", "82.157.170.175", "8.140.51.215", "81.70.146.99", "120.53.8.151", "8.140.254.106"]:
-    #     response.status_code = 403
-    #     return {"msg": "无效的IP", "data": {}}
+    if request.client.host not in ["192.144.130.26", "82.157.170.175", "8.140.51.215", "81.70.146.99", "120.53.8.151", "8.140.254.106", "127.0.0.1"]:
+        response.status_code = 403
+        return {"msg": "无效的IP", "data": {}}
     body = await request.json()
     body = resolvBody(body)
     if not body:
@@ -197,8 +216,9 @@ async def bot(request: Request, response: Response, db: Session = Depends(get_db
         return {"msg": "参数错误", "data": {}}
     if body['eventType'] == 'message.receive.instruction':
         if body["commandName"] == "黑名单列表":
-            # 从内存缓存读取
-            users_data = BLACK_DATA.values()
+            async with mem_black_data_lock:
+                # 从内存缓存读取
+                users_data = BLACK_DATA.values()
             msg = '''<details>
     <summary style="color: #8080ff;">黑名单用户列表</summary>
     <div>
@@ -214,7 +234,8 @@ async def bot(request: Request, response: Response, db: Session = Depends(get_db
             </thead>
             <tbody>'''
             for user_data in users_data:
-                created_time = datetime.datetime.fromtimestamp(user_data["created_at"])
+                created_time = datetime.datetime.fromtimestamp(
+                    user_data["created_at"])
                 msg += f'''
                 <tr style="background-color: #000000; color: #ffffff;">
                     <td>{user_data["username"]}</td>
@@ -237,37 +258,40 @@ async def bot(request: Request, response: Response, db: Session = Depends(get_db
                 if not params or len(params) < 2 or not params[0].strip() or not params[1].strip():
                     await sendMsg(body["id"], body["recvType"], "text", "参数错误")
                     return
-                
+
                 # 检查内存缓存
-                if params[0] in BLACK_DATA:
-                    await sendMsg(body["id"], body["recvType"], "text", "用户已在黑名单中")
-                    return
-                
+                async with mem_black_data_lock:
+                    if params[0] in BLACK_DATA.keys():
+                        await sendMsg(body["id"], body["recvType"], "text", "用户已在黑名单中")
+                        return
+
                 # FTs：原requests.get
                 ret = await getUserInfo(params[0])
                 if not ret["data"]["user"]["userId"]:
                     response.status_code = 400
                     return {"msg": "用户不存在", "data": {}}
-                
-                # 添加到内存缓存
-                BLACK_DATA[params[0]] = {
-                    "userid": params[0],
-                    "username": ret["data"]["user"]["nickname"],
-                    "reason": params[1],
-                    "operator": body["sender"],
-                    "created_at": time.time()# 如果三连这边正常可以改回来
-                }
-                
+
                 # FTs：持久化到数据库
                 db.add(Blacklist(
                     userid=params[0],
                     username=ret["data"]["user"]["nickname"],
                     reason=params[1],
                     operator=body["sender"],
-                    created_at=datetime.datetime.now()# 如果三连这边正常可以改回来
+                    created_at=datetime.datetime.fromtimestamp(
+                        body["time"]/1000)
                 ))
                 db.commit()
-                
+
+                async with mem_black_data_lock:
+                    # 添加到内存缓存
+                    BLACK_DATA[params[0]] = {
+                        "userid": params[0],
+                        "username": ret["data"]["user"]["nickname"],
+                        "reason": params[1],
+                        "operator": body["sender"],
+                        "created_at": body["time"]/1000
+                    }
+
                 asyncio.create_task(ws_manager.broadcast({
                     "event": "new_blacklist",
                     "data": {
@@ -275,7 +299,7 @@ async def bot(request: Request, response: Response, db: Session = Depends(get_db
                         "username": ret["data"]["user"]["nickname"],
                         "reason": params[1],
                         "operator": body["sender"],
-                        "created_at": time.time()# 如果三连这边正常可以改回来
+                        "created_at": body["time"]/1000
                     }
                 }))
                 await sendMsg(body["id"], body["recvType"], "text", "已添加")
@@ -284,23 +308,24 @@ async def bot(request: Request, response: Response, db: Session = Depends(get_db
                 await sendMsg(body['id'], body['recvType'], 'text', '你没有权限使用这条指令。')
             else:
                 params = body["msg"].split(" ", 2)
-                if len(params) < 2:
-                    params.append("无")
-                if not params or not params[0].strip():
+                if not params or len(params) < 2 or not params[0].strip() or not params[1].strip():
                     await sendMsg(body["id"], body["recvType"], "text", "参数错误")
                     return
-                
-                # 检查内存缓存
-                if params[0] not in BLACK_DATA:
-                    await sendMsg(body['id'], body['recvType'], 'text', '用户不在黑名单中')
-                    return
+
+                async with mem_black_data_lock:
+                    # 检查内存缓存
+                    if params[0] not in BLACK_DATA.keys():
+                        await sendMsg(body['id'], body['recvType'], 'text', '用户不在黑名单中')
+                        return
 
                 # 从数据库中删除
-                db.query(Blacklist).filter(Blacklist.userid == params[0]).delete()
+                db.query(Blacklist).filter(
+                    Blacklist.userid == params[0]).delete()
                 db.commit()
-                
-                # 从内存缓存中删除
-                del BLACK_DATA[params[0]]
+
+                async with mem_black_data_lock:
+                    # 从内存缓存中删除
+                    del BLACK_DATA[params[0]]
 
                 asyncio.create_task(ws_manager.broadcast({
                     "event": "del_blacklist",
@@ -308,7 +333,7 @@ async def bot(request: Request, response: Response, db: Session = Depends(get_db
                         "userId": params[0],
                         "reason": params[1],
                         "operator": body["sender"],
-                        "created_at": time.time()# 如果三连这边正常可以改回来
+                        "created_at": body["time"]/1000
                     }
                 }))
                 await sendMsg(body["id"], body["recvType"], "text", "已移除")
@@ -316,57 +341,39 @@ async def bot(request: Request, response: Response, db: Session = Depends(get_db
 
 
 async def cleanup_blacklist():
-    global BLACK_DATA
     while True:
         await asyncio.sleep(604800)  # 7天
+        print("开始清理")
         db = SessionLocal()
-        black_data_snapshot = BLACK_DATA.copy()
         cleaned = []
-        
-        try:
-            blacklist_users = db.query(Blacklist.userid).all()
-
-            for user in blacklist_users:
-                user_id = user[0]
-                ret = await getUserInfo(user_id)
-                
-                if not ret or not ret.get("data", {}).get("user", {}).get("userId"):
-                    db.query(Blacklist).filter(
-                        Blacklist.userid == user_id
-                    ).delete()
-                    
-                    if user_id in BLACK_DATA:
-                        del BLACK_DATA[user_id]
-                    
-                    cleaned.append(user_id)
-                
-                await asyncio.sleep(0.5)
-            
-            if cleaned:
-                db.commit()  # 只在有清理时提交
-                await ws_manager.broadcast({
-                    "event": "auto_clean_blacklist",
-                    "data": {
-                        "userIds": cleaned,
-                        "reason": "用户不存在,自动清理",
-                        "operator": "system",
-                        "created_at": time.time()
-                    }
-                })
-                
-                # 发送通知消息
-                msg = f'''<details>
-    <summary style="color: #8080ff;">自动清理的黑名单</summary>
-    <div>
-        {" ".join(cleaned)}
-    </div>
+        blacklist_users = db.query(Blacklist.userid).all()
+        for user in blacklist_users:
+            user_id = user[0]
+            ret = await getUserInfo(user_id)
+            if not ret["data"]["user"]["userId"]:
+                cleaned.append(user_id)
+        if cleaned:
+            db.query(Blacklist).filter(Blacklist.userid.in_(
+                cleaned)).delete(synchronize_session=False)
+            db.commit()
+            # for user in cleaned:
+            #     BLACK_DATA.pop(user, None)
+            # 保证一致（
+            await init_data()
+            await ws_manager.broadcast({
+                "event": "auto_clean_blacklist",
+                "data": {
+                    "userIds": cleaned,
+                    "reason": "用户不存在,自动清理",
+                    "operator": "system",
+                    "created_at": time.time()
+                }
+            })
+            # 发送通知消息
+            msg = f'''<details>
+<summary style="color: #8080ff;">自动清理的黑名单</summary>
+<div>
+    {" ".join(cleaned)}
+</div>
 </details>'''
-                await sendMsg(FFL_ID, "group", "html", msg)
-            else:
-                db.rollback()  # 没有更改，回滚
-        except Exception as e:
-            db.rollback()
-            BLACK_DATA = black_data_snapshot # 恢复 BLACK_DATA（如果出错）
-            print(f"清理黑名单出错: {e}")
-        finally:
-            db.close()
+            await sendMsg(FFL_ID, "group", "html", msg)
