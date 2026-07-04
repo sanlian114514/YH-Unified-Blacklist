@@ -1,35 +1,41 @@
-import requests,json
-rs = requests.Session()
-rs.headers['referer'] = 'http://myapp.jwznb.com'
+import httpx
+import json
+
 
 def setToken(token: str):
     global tok
     tok = token
 
-def editMsg(msgId: str, recvId: str, recvType: str, contentType: str, content='', Key='', parentId='', buttons=False):
-    data = {
-        'msgId': msgId,
-        'recvId': recvId,
-        'recvType': recvType,
-        'contentType': contentType,
-        'content': {
-            'text': content
-        },
-        'parentId': parentId
-    }
-    if contentType == 'image':
-        data['content'] = {'imageKey': Key}
-    elif contentType == 'file':
-        data['content'] = {'fileKey': Key}
-    elif contentType == 'video':
-        data['content'] = {'videoKey': Key}
-    if buttons:
-        data['content']['buttons'] = buttons
-    url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/edit?token={tok}'
-    response = rs.post(url, json=data, timeout=15)
-    return response.json()
+# 类似原来的requests.Session()
 
-def sendMsg(recvId: str, recvType: str, contentType: str, content='', Key='', parentId='', ats=[], buttons=False):
+
+class BotClient:
+    _instance = None
+    _client = None
+
+    @classmethod
+    async def get_client(cls):
+        if cls._client is None:
+            cls._client = httpx.AsyncClient(
+                timeout=30.0,
+                headers={
+                    'referer': 'http://myapp.jwznb.com',
+                    'Content-Type': 'application/json'
+                },
+                limits=httpx.Limits(
+                    max_keepalive_connections=10, max_connections=20)
+            )
+        return cls._client
+
+    @classmethod
+    async def close(cls):
+        if cls._client:
+            await cls._client.aclose()
+            cls._client = None
+
+
+async def sendMsg(recvId: str, recvType: str, contentType: str,
+                  content='', Key='', parentId='', ats=[], buttons=False):
     data = {
         'recvId': recvId,
         'recvType': recvType,
@@ -48,11 +54,51 @@ def sendMsg(recvId: str, recvType: str, contentType: str, content='', Key='', pa
         data['content'] = {'videoKey': Key}
     if buttons:
         data['content']['buttons'] = buttons
-    url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/send?token={tok}'
-    response = rs.post(url, json=data, timeout=15)
-    return response.json()['data']
 
-def setBoard(contentType: str, content: str, Global=False, recvId='', recvType='', expireTime=0, memberId=''):
+    url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/send?token={tok}'
+    client = await BotClient.get_client()
+    response = await client.post(url, json=data)
+    return response.json()
+
+
+async def getUserInfo(userId: str):
+    """获取用户信息 - 异步版本"""
+    client = await BotClient.get_client()
+    response = await client.get(
+        f'https://chat-web-go.jwzhd.com/v1/user/homepage?userId={userId}'
+    )
+    return response.json()
+
+
+async def editMsg(msgId: str, recvId: str, recvType: str, contentType: str,
+                  content='', Key='', parentId='', buttons=False):
+    data = {
+        'msgId': msgId,
+        'recvId': recvId,
+        'recvType': recvType,
+        'contentType': contentType,
+        'content': {
+            'text': content
+        },
+        'parentId': parentId
+    }
+    if contentType == 'image':
+        data['content'] = {'imageKey': Key}
+    elif contentType == 'file':
+        data['content'] = {'fileKey': Key}
+    elif contentType == 'video':
+        data['content'] = {'videoKey': Key}
+    if buttons:
+        data['content']['buttons'] = buttons
+
+    url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/edit?token={tok}'
+    client = await BotClient.get_client()
+    response = await client.post(url, json=data)
+    return response.json()
+
+
+async def setBoard(contentType: str, content: str, Global=False,
+                   recvId='', recvType='', expireTime=0, memberId=''):
     url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/board-all?token={tok}'
     data = {
         'contentType': contentType,
@@ -64,33 +110,43 @@ def setBoard(contentType: str, content: str, Global=False, recvId='', recvType='
         data['chatType'] = recvType
         data['memberId'] = memberId
         url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/board?token={tok}'
-    response = rs.post(url, json=data, timeout=15)
+
+    client = await BotClient.get_client()
+    response = await client.post(url, json=data)
     return response.json()
 
-def dismissBoard(Global=False, recvId='', recvType=''):
+
+async def dismissBoard(Global=False, recvId='', recvType=''):
     data = {}
     url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/board-all-dismiss?token={tok}'
     if not Global:
         data['chatId'] = recvId
         data['chatType'] = recvType
         url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/board-dismiss?token={tok}'
-    response = rs.post(url, json=data, timeout=15)
+
+    client = await BotClient.get_client()
+    response = await client.post(url, json=data)
     return response.json()
 
-def recallMsg(msgId: str, recvId: str, recvType: str):
+
+async def recallMsg(msgId: str, recvId: str, recvType: str):
     data = {
         'msgId': msgId,
         'chatId': recvId,
         'chatType': recvType
     }
     url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/recall?token={tok}'
-    response = rs.post(url, json=data, timeout=15)
+    client = await BotClient.get_client()
+    response = await client.post(url, json=data)
     return response.json()
 
-def msgList(recvId: str, recvType: str, messageId='', before=0, after=0):
+
+async def msgList(recvId: str, recvType: str, messageId='', before=0, after=0):
     url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/messages?token={tok}&chat-id={recvId}&chat-type={recvType}&message-id={messageId}&before={str(before)}&after={str(after)}'
-    response = rs.get(url, timeout=15)
+    client = await BotClient.get_client()
+    response = await client.get(url)
     return response.json()
+
 
 def resolvBody(body):
     if 'header' not in body:

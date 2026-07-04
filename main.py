@@ -2,17 +2,36 @@
 """
 from fastapi import FastAPI, Request
 from v1 import blacklist, websocket
-from v1.blacklist import cleanup_blacklist
+from v1.blacklist import cleanup_blacklist, init_data
 from fastapi.responses import JSONResponse
 from v1.YHlib import *
 import traceback
 import uvicorn
 from json import JSONDecodeError
-import threading
+import asyncio
+from contextlib import asynccontextmanager
 
-app = FastAPI()
-setToken("botToken")
-FFL_ID = "934215405"
+# 生命周期事件：初始化
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- (Startup) ---
+    # 1. 初始化黑名单数据(写入内存)
+    await init_data()
+    # 2. 启动后台清理任务
+    cleanup_task = asyncio.create_task(cleanup_blacklist())
+    yield  # 应用运行期间暂停在此处
+
+    # --- (Shutdown) ---
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        print("清理任务已停止")
+
+app = FastAPI(lifespan=lifespan)
+setToken("***REMOVED***")
 
 app.include_router(blacklist.router, prefix="/v1")
 app.include_router(websocket.router, prefix="/v1")
@@ -32,8 +51,5 @@ def exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"msg": "错误", "data": {"Exception": str(exc)}})
 
 
-clean = threading.Thread(target=cleanup_blacklist, daemon=True)
-
 if __name__ == "__main__":
-    clean.start()
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
