@@ -1,15 +1,18 @@
 import httpx
 import json
 
+
 def setToken(token: str):
     global tok
     tok = token
 
 # 类似原来的requests.Session()
+
+
 class BotClient:
     _instance = None
     _client = None
-    
+
     @classmethod
     async def get_client(cls):
         if cls._client is None:
@@ -19,17 +22,19 @@ class BotClient:
                     'referer': 'http://myapp.jwznb.com',
                     'Content-Type': 'application/json'
                 },
-                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+                limits=httpx.Limits(
+                    max_keepalive_connections=10, max_connections=20)
             )
         return cls._client
-    
+
     @classmethod
     async def close(cls):
         if cls._client:
             await cls._client.aclose()
             cls._client = None
 
-async def sendMsg(recvId: str, recvType: str, contentType: str, 
+
+async def sendMsg(recvId: str, recvType: str, contentType: str,
                   content='', Key='', parentId='', ats=[], buttons=False):
     data = {
         'recvId': recvId,
@@ -49,11 +54,12 @@ async def sendMsg(recvId: str, recvType: str, contentType: str,
         data['content'] = {'videoKey': Key}
     if buttons:
         data['content']['buttons'] = buttons
-    
+
     url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/send?token={tok}'
     client = await BotClient.get_client()
     response = await client.post(url, json=data)
-    return response.json()['data']
+    return response.json()
+
 
 async def getUserInfo(userId: str):
     """获取用户信息 - 异步版本"""
@@ -64,7 +70,7 @@ async def getUserInfo(userId: str):
     return response.json()
 
 
-async def editMsg(msgId: str, recvId: str, recvType: str, contentType: str, 
+async def editMsg(msgId: str, recvId: str, recvType: str, contentType: str,
                   content='', Key='', parentId='', buttons=False):
     data = {
         'msgId': msgId,
@@ -84,13 +90,14 @@ async def editMsg(msgId: str, recvId: str, recvType: str, contentType: str,
         data['content'] = {'videoKey': Key}
     if buttons:
         data['content']['buttons'] = buttons
-    
+
     url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/edit?token={tok}'
     client = await BotClient.get_client()
     response = await client.post(url, json=data)
     return response.json()
 
-async def setBoard(contentType: str, content: str, Global=False, 
+
+async def setBoard(contentType: str, content: str, Global=False,
                    recvId='', recvType='', expireTime=0, memberId=''):
     url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/board-all?token={tok}'
     data = {
@@ -103,7 +110,7 @@ async def setBoard(contentType: str, content: str, Global=False,
         data['chatType'] = recvType
         data['memberId'] = memberId
         url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/board?token={tok}'
-    
+
     client = await BotClient.get_client()
     response = await client.post(url, json=data)
     return response.json()
@@ -116,7 +123,7 @@ async def dismissBoard(Global=False, recvId='', recvType=''):
         data['chatId'] = recvId
         data['chatType'] = recvType
         url = f'https://chat-go.jwzhd.com/open-apis/v1/bot/board-dismiss?token={tok}'
-    
+
     client = await BotClient.get_client()
     response = await client.post(url, json=data)
     return response.json()
@@ -139,6 +146,7 @@ async def msgList(recvId: str, recvType: str, messageId='', before=0, after=0):
     client = await BotClient.get_client()
     response = await client.get(url)
     return response.json()
+
 
 def resolvBody(body):
     if 'header' not in body:

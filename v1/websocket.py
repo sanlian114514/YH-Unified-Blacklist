@@ -10,7 +10,7 @@ router = APIRouter(prefix="/blacklist", tags=["WebSocket"])
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: list[str:WebSocket] = []
+        self.active_connections: list[WebSocket] = []
 
     def add(self, websocket: WebSocket):
         self.active_connections.append(websocket)
@@ -27,7 +27,7 @@ class ConnectionManager:
             try:
                 await bot.send_json(message)
             except WebSocketException:
-                self.disconnect(bot)
+                await self.disconnect(bot)
 
 
 manager = ConnectionManager()
@@ -51,6 +51,4 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        pass
-    finally:
         await manager.disconnect(websocket)
