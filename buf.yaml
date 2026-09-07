@@ -1,0 +1,6 @@
+version: v2
+modules:
+  - path: .  # 表示当前目录（项目根目录）就是一个模块
+lint:
+  use:
+    - STANDARD
