@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+// buf:lint:ignore PACKAGE_DIRECTORY_MATCH
+// buf:lint:ignore PACKAGE_VERSION_SUFFIX
+package yh;
+
+message Status {
+  int64 request_id = 1;
+  int32 code = 2;
+  string msg = 3;
+}
+
+message GetUserRequest {
+  string id = 2;
+}
+
+// 获取用户响应
+message GetUserResponse {
+  /*
+     4402 该用户不存在
+     7100 因违反相关规定，该用户被封禁
+  */
+  Status status = 1;
+  Data data = 2; // 数据
+  message Data {
+    int64 ban_id = 9; // 封禁 ID
+    int64 ban_until_timestamp = 10; // 封禁结束时间(时间戳),永久无此项
+    string ban_reason = 21; // 封禁原因
+  }
+}

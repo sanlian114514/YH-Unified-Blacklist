@@ -1,5 +1,6 @@
 import httpx
 import json
+from proto.proto.full_pb import GetUserRequest, GetUserResponse # protobuf 相关内容
 
 
 def setToken(token: str):
@@ -68,6 +69,20 @@ async def getUserInfo(userId: str):
         f'https://chat-web-go.jwzhd.com/v1/user/homepage?userId={userId}'
     )
     return response.json()
+
+async def getUser(userId: str) -> GetUserResponse:
+    """获取用户信息-用户 API 接口版本"""
+    client = await BotClient.get_client()
+    pb = GetUserRequest(
+        id=userId
+    )
+    payload = pb.to_binary()
+    response = await client.post(
+        f"https://chat-go.jwzhd.com/v1/user/get-user",
+        headers={"token": "11451419180"},
+    data = payload
+    )
+    return GetUserResponse.from_binary(response.content)
 
 
 async def editMsg(msgId: str, recvId: str, recvType: str, contentType: str,

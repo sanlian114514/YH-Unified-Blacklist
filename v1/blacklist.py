@@ -349,8 +349,9 @@ async def cleanup_blacklist():
         blacklist_users = db.query(Blacklist.userid).all()
         for user in blacklist_users:
             user_id = user[0]
-            ret = await getUserInfo(user_id)
-            if not ret["data"]["user"]["userId"]:
+            ret = await getUser(user_id)
+            # 4402 用户不存在,7100 用户已封禁
+            if ret.status.code == 4402 or (ret.status.code == 7100 and ret.data.ban_until_timestamp):
                 cleaned.append(user_id)
         if cleaned:
             db.query(Blacklist).filter(Blacklist.userid.in_(
